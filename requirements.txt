@@ -1,0 +1,11 @@
+# Python and core libraries
+python>=3.11
+pandas
+numpy
+matplotlib
+
+# Optional / later
+statsmodels
+pyarrow
+pytest
+jupyter
