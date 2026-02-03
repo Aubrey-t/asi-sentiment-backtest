@@ -1,0 +1,201 @@
+---
+title: "Technical Note: Sentiment-Driven Portfolio Strategy"
+author: "Tafadzwa Aubrey Tsambatare"
+date: "2026-02-02"
+format:
+  html: default
+  pdf: default
+  docx: default
+---
+
+# Introduction
+
+
+This technical note documents the development, implementation, and evaluation of a sentiment-driven portfolio strategy for the South African equity market. The strategy uses the Kasi Composite Confidence Index (CCI) as a macro-sentiment signal and combines it with JSE sector indices to dynamically allocate capital across market regimes.
+
+The primary objective is to evaluate whether incorporating consumer sentiment data can improve portfolio risk-adjusted performance relative to a passive benchmark. The methodology applies regime classification based on historical CCI percentiles, sector allocation informed by recent momentum, and a comprehensive set of risk and performance metrics. Strategy performance is evaluated against the ALSI Total Return index over the available sample period.
+
+This document is intended for quantitative researchers, portfolio managers, and practitioners interested in the application of sentiment indicators to systematic asset allocation in emerging markets. The analysis was conducted using reproducible code and data workflows; further details and materials are available upon request.
+
+# Data & Methodology
+
+## Data Sources
+
+The analysis utilizes three primary data sources:
+
+1. **Kasi Composite Confidence Index (CCI):** A proprietary macroeconomic sentiment indicator reflecting consumer and business confidence in South Africa. The CCI is published monthly and serves as the basis for regime classification.
+2. **JSE Sector Indices:** Total return indices for major sectors of the Johannesburg Stock Exchange, including Financials, Industrials, Resources, and others. These indices provide the universe for sector allocation and momentum analysis.
+3. **ALSI Total Return Index:** The FTSE/JSE All Share Index (ALSI) total return series is used as the passive benchmark for performance comparison.
+
+Below is a preview of the final merged dataset used for all subsequent analysis and backtesting:
+
+
+```{python}
+#| tbl-cap: "Preview of final merged dataset used for analysis"
+#| tbl-landscape: true
+import pandas as pd
+backtest_data = pd.read_csv('../data/interim/backtest_data.csv', index_col='Date', parse_dates=True)
+backtest_data_reset = backtest_data.reset_index()
+cols = ['Date', 'Top 40 TR', 'Healthcare Index', 'Telcos', 'Consumer Staples', 'Consumer Discretionary', 'Industrials', 'Financials', 'ALSI Total Return', 'CCI']
+print(backtest_data_reset[cols].head().to_string(index=False))
+```
+
+## Data Preprocessing
+
+All datasets were imported in monthly frequency and aligned on calendar month-end dates. Preprocessing steps included:
+
+- **Index Exclusion:** The SWIX index was excluded from analysis due to limited data availability (only from December 2020 onward).
+- **Data Cleaning:** Removal of duplicate entries, standardization of index names, and verification of time series continuity.
+- **Date Adjustments:** The analysis period begins February 2016, with the first month (January 2016) dropped due to NaN values from initial return calculations. All indices and sentiment data were merged on nearest month-end dates to ensure consistent alignment.
+- **Missing Data Handling:** No forward-filling was applied; periods or indices with insufficient data were excluded from the final dataset.
+
+All transformations were performed using Python (pandas, numpy), ensuring reproducibility and transparency in the workflow.
+
+## Regime Classification
+
+
+Market regimes are assigned monthly based on the percentile rank of the Kasi Composite Confidence Index (CCI) within the historical sample. The classification logic is as follows:
+
+- **RISK-ON:** CCI value is above the 67th percentile (top third of historical values).
+- **NEUTRAL:** CCI value is between the 33rd and 67th percentiles.
+- **RISK-OFF:** CCI value is below the 33rd percentile (bottom third of historical values).
+
+This approach allows the strategy to adapt dynamically to shifts in macro sentiment, with regime boundaries chosen to ensure a balanced distribution of market states over time. The percentile-based method is robust to outliers and changes in the absolute level of the CCI.
+
+The assigned regime for each month determines the eligible sector indices for allocation and triggers portfolio rebalancing only when a regime change occurs.
+
+## Sector Allocation & Momentum
+
+
+Within each regime, sector allocation is determined using a momentum-based approach:
+
+1. **Eligible Sectors:** For each regime (RISK-ON, NEUTRAL, RISK-OFF), a predefined set of JSE sector indices is considered based on their historical performance in different macro environments.
+
+2. **Momentum Calculation:**
+   - For each eligible sector $i$, 6-month total return momentum is calculated as:
+     $$
+     	ext{Momentum}_i = \frac{P_{t}}{P_{t-6}} - 1
+     $$
+     where $P_{t}$ is the sector index level at month $t$ and $P_{t-6}$ is the level six months prior.
+   - **Example:** If Industrials index was 10,000 six months ago and is 11,200 now, then:
+     $$
+     	ext{Momentum}_{\text{Industrials}} = \frac{11,200}{10,000} - 1 = 0.12 \text{ (12%)}
+     $$
+
+3. **Selection & Weighting:**
+   - Sectors with positive momentum are included in the allocation; those with negative or missing momentum receive zero weight.
+   - If all eligible sectors have negative or missing momentum, allocation is split equally among them.
+   - Otherwise, weights are assigned in proportion to positive momentum values:
+     $$
+     w_i = \frac{\text{Momentum}_i}{\sum_{j \in S^+} \text{Momentum}_j}
+     $$
+     where $S^+$ is the set of eligible sectors with positive momentum.
+   - **Example:** Suppose in a RISK-ON regime, the eligible sectors and their 6-month momentum are:
+     - Top 40: 8%
+     - Telcos: 3%
+     - Industrials: -2%
+     - Discretionary: 1%
+     Only Top 40, Telcos, and Discretionary are included. Their weights are:
+     $$
+     w_{\text{Top 40}} = \frac{0.08}{0.08+0.03+0.01} = 0.666\ (66.6\%) \\
+     w_{\text{Telcos}} = \frac{0.03}{0.08+0.03+0.01} = 0.25\ (25\%) \\
+     w_{\text{Discretionary}} = \frac{0.01}{0.08+0.03+0.01} = 0.083\ (8.3\%)
+     $$
+
+4. **Rebalancing:** Portfolio weights are updated only when a regime change occurs, not on every month.
+
+## Risk and Performance Metrics
+
+The strategy is evaluated using a comprehensive set of risk and performance metrics, designed to capture both absolute and risk-adjusted returns, as well as downside risk and market sensitivity. The key metrics include:
+
+### Annualized Return
+
+The annualized return measures the geometric average return earned by the strategy each year over the evaluation period. It is calculated as:
+$$
+\text{Annualized Return} = \left( \prod_{t=1}^{T} (1 + r_t) \right)^{\frac{12}{T}} - 1
+$$
+where $r_t$ is the monthly return and $T$ is the total number of months.
+
+### Cumulative Return
+
+Cumulative return represents the total percentage gain or loss over the entire evaluation period:
+$$
+\text{Cumulative Return} = \prod_{t=1}^{T} (1 + r_t) - 1
+$$
+where $r_t$ is the monthly return.
+
+### Volatility (Standard Deviation)
+
+Volatility measures the dispersion of returns and is a proxy for the risk of the strategy. It is calculated as the annualized standard deviation of monthly returns:
+$$
+\text{Volatility} = \sigma_{\text{monthly}} \times \sqrt{12}
+$$
+where $\sigma_{\text{monthly}}$ is the standard deviation of monthly returns.
+
+### Sharpe Ratio
+
+The Sharpe ratio measures the risk-adjusted return of the strategy, defined as the excess return per unit of volatility. It is calculated as:
+$$
+\text{Sharpe Ratio} = \frac{\bar{r} - r_f}{\sigma}
+$$
+where $\bar{r}$ is the average monthly return (annualized), $r_f$ is the risk-free rate (annualized, typically set to zero for simplicity), and $\sigma$ is the annualized volatility.
+
+### Up/Down Capture Ratios
+
+Up and Down Capture Ratios measure the strategy’s performance relative to the benchmark during periods when the benchmark is rising (up) or falling (down).
+
+- **Up Capture Ratio:**
+  $$
+  \text{Up Capture} = \frac{\sum_{t \in U} r_{\text{strategy}, t}}{\sum_{t \in U} r_{\text{benchmark}, t}}
+  $$
+  where $U$ is the set of months when the benchmark return is positive.
+
+- **Down Capture Ratio:**
+  $$
+  \text{Down Capture} = \frac{\sum_{t \in D} r_{\text{strategy}, t}}{\sum_{t \in D} r_{\text{benchmark}, t}}
+  $$
+  where $D$ is the set of months when the benchmark return is negative.
+
+A ratio below 100% in down markets and above 100% in up markets is desirable.
+
+### Maximum Drawdown
+
+Maximum drawdown measures the largest peak-to-trough decline in the portfolio value over the evaluation period. It quantifies the worst observed loss from a historical high:
+$$
+\text{Max Drawdown} = \min_t \left( \frac{V_t - \max_{s \leq t} V_s}{\max_{s \leq t} V_s} \right)
+$$
+where $V_t$ is the portfolio value at time $t$.
+
+A lower maximum drawdown indicates better downside risk protection.
+
+# Results
+
+## 1. CCI Statistical Summary and Distribution
+
+To understand the macro sentiment environment, we begin by exploring the statistical properties and distribution of the Kasi Composite Confidence Index (CCI) over the sample period. This provides context for regime classification and highlights the range and variability of sentiment signals used in the strategy.
+
+```{python}
+#| echo: false
+import pandas as pd
+import matplotlib.pyplot as plt
+backtest_data = pd.read_csv('../data/interim/backtest_data.csv', index_col='Date', parse_dates=True)
+cci = backtest_data['CCI']
+stats = cci.describe().to_frame().rename(columns={'CCI': 'Value'})
+print(stats)
+plt.figure(figsize=(6, 3))
+cci.hist(bins=20, grid=False)
+plt.xlabel('CCI Value')
+plt.ylabel('Frequency')
+plt.title('Distribution of Kasi Composite Confidence Index (CCI)')
+plt.tight_layout()
+plt.show()
+```
+
+
+The summary statistics and histogram above show the central tendency, spread, and skewness of the CCI, which inform the percentile-based regime thresholds used in the strategy.
+
+# Discussion
+
+# Limitations
+
+# Conclusion
